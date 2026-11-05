@@ -6,15 +6,33 @@ runs in float, but every weight value is one the quantized model could hold.
 This isolates the effect of the *weight rounding* itself, without mixing in
 differences between low-bit kernels.
 
-Scheme: symmetric round-to-nearest (RTN). The scale is computed per output
-channel, or per group of `group_size` input rows within each output channel.
 Biases, embeddings, unembedding and LayerNorm weights stay in full precision,
-which matches common practice for weight-only quantization.
+which matches common practice. Schemes (`SCHEMES`):
+
+- rtn: symmetric round-to-nearest. The scale is computed per output channel,
+  or per group of `group_size` input rows within each output channel.
+- awq_lite: activation-aware scaling in the style of AWQ (Lin et al. 2023),
+  without its clipping search. On calibration tokens we record the input of
+  every quantized linear and its per-input-channel mean |x|. For a grid of
+  alpha in [0, 1] the input channels are scaled by s = mean|x| ** alpha, the
+  weight is quantized as RTN(W * s) / s, and the alpha with the lowest output
+  MSE ||xW - xWq||^2 is kept. Dividing by s after dequantizing is exactly
+  equivalent to folding 1/s into the previous op (LayerNorm, or W_V / W_in for
+  W_O / W_out) as real AWQ does, so we never touch the previous op. Weights
+  that read the same input (Q, K, V; W_in and W_gate) share one s and alpha.
+  alpha = 0 is plain RTN, so on the calibration data awq_lite is never worse.
+- w8a8: RTN weights plus simulated symmetric per-token quantization (at
+  `act_bits`) of the input of every quantized linear, applied by permanent
+  TransformerLens hooks on the quantized copy.
+
+As in the feature metrics, the BOS position is excluded from calibration
+statistics because its activations are outliers.
 """
 
 from __future__ import annotations
 
 import copy
+from collections import defaultdict
 
 import torch
 
@@ -24,7 +42,18 @@ import torch
 # `_W_K` / `_W_V` are the grouped-query attention names (e.g. Gemma 2) and
 # `W_gate` is the gated-MLP input projection.
 DEFAULT_TARGETS = ("W_Q", "W_K", "W_V", "_W_K", "_W_V", "W_O", "W_in", "W_gate", "W_out")
-SCHEMES = ("rtn",)
+SCHEMES = ("rtn", "awq_lite", "w8a8")
+
+# Hook point (within blocks.{i}) holding the input of each target weight.
+# W_O reads hook_z [batch, pos, n_heads, d_head], so its input channels are
+# (head, d_head) pairs; all other inputs are [batch, pos, d_in].
+INPUT_HOOKS = {
+    "W_Q": "ln1.hook_normalized", "W_K": "ln1.hook_normalized", "W_V": "ln1.hook_normalized",
+    "_W_K": "ln1.hook_normalized", "_W_V": "ln1.hook_normalized",
+    "W_O": "attn.hook_z",
+    "W_in": "ln2.hook_normalized", "W_gate": "ln2.hook_normalized",
+    "W_out": "mlp.hook_post",
+}
 
 
 def block_of(name: str) -> int | None:
@@ -68,6 +97,80 @@ def fake_quantize(w: torch.Tensor, bits: int, group_size: int | None = None) -> 
     return (q * scale).reshape(w_f.shape).to(w.dtype)
 
 
+def fake_quantize_act(x: torch.Tensor, bits: int) -> torch.Tensor:
+    """Symmetric per-token quantize-dequantize of activations.
+
+    Args:
+        x: [batch, pos, ...]; one scale per (batch, pos) over all remaining dims.
+        bits: bit width. Values >= 16 return `x` unchanged.
+    """
+    if bits >= 16:
+        return x.clone()
+    if bits < 2:
+        raise ValueError("bits must be >= 2")
+    qmax = 2 ** (bits - 1) - 1
+    x_f = x.float()
+    amax = x_f.flatten(2).abs().amax(-1).reshape(*x.shape[:2], *[1] * (x.dim() - 2))
+    scale = (amax / qmax).clamp(min=1e-12)
+    return (torch.clamp(torch.round(x_f / scale), -qmax, qmax) * scale).to(x.dtype)
+
+
+def _out_err(x: torch.Tensor, w: torch.Tensor, wq: torch.Tensor) -> float:
+    """||x W - x Wq||^2 for x [rows, *in_shape]; W's input dims are axis -2 or all but -1."""
+    d = (w - wq).float()
+    if d.shape[:-1] == x.shape[1:]:  # W_O: input channel = (head, d_head)
+        d = d.reshape(-1, d.shape[-1])
+    else:  # [*heads, d_in, d_out] -> [d_in, heads * d_out]
+        d = d.movedim(-2, 0).reshape(d.shape[-2], -1)
+    return (x.reshape(x.shape[0], -1).float() @ d).pow(2).sum().item()
+
+
+@torch.no_grad()
+def awq_lite_weights(ws: list[torch.Tensor], x: torch.Tensor, bits: int,
+                     group_size: int | None = None,
+                     n_grid: int = 20) -> tuple[list[torch.Tensor], float]:
+    """AWQ-style scaled quantization of weights that share one input.
+
+    Args:
+        ws: weights reading the same input; their input dims (axis -2, or all
+            but the last axis for W_O) match `x.shape[1:]`.
+        x: [rows, *in_shape] calibration inputs.
+        n_grid: alpha is searched over n_grid + 1 points in [0, 1].
+    Returns the quantize-dequantized weights (scale folded back in) and the
+    chosen alpha, which minimises the output MSE summed over `ws`.
+    """
+    mean_abs = x.float().abs().mean(0)
+    shape = (*mean_abs.shape, 1)
+    best = (float("inf"), None, 0.0)
+    for alpha in torch.linspace(0, 1, n_grid + 1).tolist():
+        s = mean_abs.pow(alpha).clamp(min=1e-4)
+        s = (s / (s.max() * s.min()).sqrt()).reshape(shape)
+        qs = [(fake_quantize(w.float() * s, bits, group_size) / s).to(w.dtype) for w in ws]
+        err = sum(_out_err(x, w, q) for w, q in zip(ws, qs))
+        if err < best[0]:
+            best = (err, qs, alpha)
+    return best[1], best[2]
+
+
+@torch.no_grad()
+def _calib_inputs(model, tokens: torch.Tensor, hooks: list[str], batch_size: int,
+                  max_rows: int = 1024) -> dict[str, torch.Tensor]:
+    """Inputs at `hooks` on `tokens`, BOS dropped, strided subsample of <= max_rows rows."""
+    n_rows = tokens.shape[0] * (tokens.shape[1] - 1)
+    stride = -(-n_rows // max_rows)
+    out = defaultdict(list)
+    seen = 0
+    for i in range(0, tokens.shape[0], batch_size):
+        batch = tokens[i:i + batch_size].to(model.cfg.device)
+        _, cache = model.run_with_cache(batch, names_filter=hooks)
+        start = (-seen) % stride  # keep global rows 0, stride, 2*stride, ...
+        for h in hooks:
+            a = cache[h][:, 1:]
+            out[h].append(a.reshape(-1, *a.shape[2:])[start::stride])
+        seen += batch.shape[0] * (batch.shape[1] - 1)
+    return {h: torch.cat(v) for h, v in out.items()}
+
+
 @torch.no_grad()
 def quantize_model(model, bits: int, group_size: int | None = None,
                    targets: tuple[str, ...] = DEFAULT_TARGETS, *, scheme: str = "rtn",
@@ -80,17 +183,48 @@ def quantize_model(model, bits: int, group_size: int | None = None,
 
     Args:
         scheme: one of `SCHEMES`.
-        calib_tokens: [n, ctx] calibration tokens, needed by activation-aware schemes.
-        act_bits: activation bit width for schemes that quantize activations.
+        calib_tokens: [n, ctx] calibration tokens (BOS first), required by awq_lite.
+        act_bits: activation bit width for w8a8.
         blocks: only quantize these transformer blocks (None = all).
+        batch_size: batch size for the calibration forward passes.
     """
     if scheme not in SCHEMES:
         raise ValueError(f"unknown scheme {scheme!r}, expected one of {SCHEMES}")
+    if scheme == "awq_lite" and calib_tokens is None:
+        raise ValueError("awq_lite needs calib_tokens")
     qmodel = copy.deepcopy(model)
-    for name, param in qmodel.named_parameters():
-        if name.split(".")[-1] in targets and (blocks is None or block_of(name) in blocks):
-            param.copy_(fake_quantize(param.data, bits, group_size))
+    params = {name: p for name, p in qmodel.named_parameters()
+              if name.split(".")[-1] in targets and (blocks is None or block_of(name) in blocks)}
+    if bits >= 16 and (scheme != "w8a8" or act_bits >= 16):
+        return qmodel
+
+    if scheme != "awq_lite":
+        for p in params.values():
+            p.copy_(fake_quantize(p.data, bits, group_size))
+        if scheme == "w8a8" and act_bits < 16:
+            def quant_act(x, hook):
+                return fake_quantize_act(x, act_bits)
+            for h in {_input_hook(n) for n in params}:
+                qmodel.add_hook(h, quant_act, is_permanent=True)
+        return qmodel
+
+    groups = defaultdict(list)  # input hook -> params that read it
+    for name, p in params.items():
+        groups[_input_hook(name)].append(p)
+    # ponytail: every layer is calibrated on full-precision activations; real AWQ
+    # calibrates sequentially on the already-quantized prefix. Add that if
+    # low-bit error compounding across layers matters.
+    xs = _calib_inputs(model, calib_tokens, list(groups), batch_size)
+    for h, ps in groups.items():
+        qs, _ = awq_lite_weights([p.data for p in ps], xs[h], bits, group_size)
+        for p, q in zip(ps, qs):
+            p.copy_(q)
     return qmodel
+
+
+def _input_hook(name: str) -> str:
+    """`blocks.3.attn.W_Q` -> `blocks.3.ln1.hook_normalized`."""
+    return f"blocks.{block_of(name)}.{INPUT_HOOKS[name.split('.')[-1]]}"
 
 
 @torch.no_grad()
