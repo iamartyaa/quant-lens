@@ -287,7 +287,10 @@ def main() -> None:
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.manual_seed(0)
-    model = HookedTransformer.from_pretrained(args.model, device=device)
+    # fold_ln=False keeps LayerNorm gains out of W_Q/W_K/W_V/W_in, so we quantize the
+    # weights a deployed model would quantize. Folding is exact, so the residual
+    # stream the SAEs read is unchanged.
+    model = HookedTransformer.from_pretrained(args.model, device=device, fold_ln=False)
     saes, layers = {}, {}
     for layer in args.layers:
         hook = args.hook_template.format(layer=layer)
