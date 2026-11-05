@@ -83,13 +83,13 @@ def tokenize(model, texts: list[str], ctx: int, n_seqs: int) -> torch.Tensor:
     return torch.tensor(rows, dtype=torch.long)
 
 
-def load_texts(dataset: str | None, n_docs: int) -> list[str]:
-    """First `n_docs` texts of a streaming HF dataset, or BUILTIN_TEXTS if None."""
+def load_texts(dataset: str | None, n_docs: int, offset: int = 0) -> list[str]:
+    """`n_docs` texts of a streaming HF dataset after skipping `offset`, or BUILTIN_TEXTS if None."""
     if dataset is None:
         return BUILTIN_TEXTS
     from datasets import load_dataset
 
-    ds = load_dataset(dataset, split="train", streaming=True)
+    ds = load_dataset(dataset, split="train", streaming=True).skip(offset)
     texts = []
     for row in ds:
         texts.append(row["text"])
@@ -254,6 +254,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dataset", default="NeelNanda/pile-10k",
                    help="HF dataset with a 'text' column; 'builtin' for a tiny offline sample")
     p.add_argument("--n-docs", type=int, default=2000)
+    p.add_argument("--doc-offset", type=int, default=0,
+                   help="skip this many documents first, to sample a different slice of the dataset")
     p.add_argument("--n-seqs", type=int, default=128)
     p.add_argument("--ctx", type=int, default=128)
     p.add_argument("--batch-size", type=int, default=8)
@@ -297,7 +299,7 @@ def main() -> None:
         saes[hook] = load_pretrained_sae(args.sae_release, args.sae_id_template.format(layer=layer), device)
         layers[hook] = layer
 
-    texts = load_texts(None if args.dataset == "builtin" else args.dataset, args.n_docs)
+    texts = load_texts(None if args.dataset == "builtin" else args.dataset, args.n_docs, args.doc_offset)
     all_tokens = tokenize(model, texts, args.ctx, args.n_seqs + args.calib_seqs)
     tokens, calib = all_tokens[:args.n_seqs], all_tokens[args.n_seqs:]
     if args.scheme == "awq_lite" and len(calib) == 0:
