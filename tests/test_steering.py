@@ -67,3 +67,25 @@ def test_plot_steering_writes_file(tmp_path):
     path = tmp_path / "steering.png"
     plot_steering(pd.DataFrame(rows), str(path))
     assert path.stat().st_size > 0
+
+
+def test_fast_path_matches_full_forward():
+    # resid_pre, resid_post mid-model, resid_post at the last layer (straight to
+    # ln_final), and a non-resid hook that falls back to the full pass
+    m = tiny_model()
+    hooks = ["blocks.0.hook_resid_pre", "blocks.0.hook_resid_post", "blocks.1.hook_resid_pre",
+             "blocks.1.hook_resid_post", "blocks.0.hook_mlp_out"]
+    saes = {h: SimpleSAE(32, 64, seed=i) for i, h in enumerate(hooks)}
+    tokens = torch.randint(0, 100, (5, 12), generator=torch.Generator().manual_seed(1))
+    for q in (quantize_model(m, 4, scheme="w8a8", act_bits=4), quantize_model(m, 3)):
+        run = lambda fast: run_steering(m, q, saes, tokens, n_features=3, alphas=(0.5, 2.0),
+                                        batch_size=2, min_count=1, log=quiet, _fast=fast)
+        fast, slow = run(True), run(False)
+        assert len(fast) == len(slow) == 5 * 3 * 2
+        for a, b in zip(fast, slow):
+            assert a.keys() == b.keys()
+            assert (a["hook"], a["feature"], a["alpha"]) == (b["hook"], b["feature"], b["alpha"])
+            assert a["delta_norm_ref"] > 0
+            for k in a:
+                if k != "hook":
+                    assert math.isclose(a[k], b[k], rel_tol=1e-5, abs_tol=1e-6), (a["hook"], k)

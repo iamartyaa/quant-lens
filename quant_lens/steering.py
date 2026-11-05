@@ -12,8 +12,11 @@ Definitions (BOS, position 0, is excluded everywhere):
 - steering vector: alpha * r * d_hat, with d_hat = W_dec[f] / ||W_dec[f]|| and
   r = mean L2 norm of the reference residual stream at that hook. So alpha is
   in units of the typical residual norm, comparable across layers and models.
-  It is added at every position except BOS, via run_with_hooks (permanent
-  hooks on the quantized model, e.g. activation quantization, stay in place).
+  It is added at every position except BOS (permanent hooks on the quantized
+  model, e.g. activation quantization, stay in place). For resid_pre / resid_post
+  hooks the steered pass starts at the hook from each model's own cached clean
+  residual (start_at_layer) instead of rerunning the earlier blocks; other hooks
+  use a full run_with_hooks pass. Both give the same result.
 - per token: delta_ref = logp_ref_steered - logp_ref_clean and
   delta_q = logp_q_steered - logp_q_clean (log_softmax over the vocab).
 
@@ -73,11 +76,38 @@ def _steer_hook(v: torch.Tensor):
     return hook
 
 
+def _start_layer(hook: str) -> int | None:
+    """Block index a steered pass can start from: blocks.L.hook_resid_pre -> L,
+    blocks.L.hook_resid_post -> L + 1 (n_layers = straight to ln_final). Else None."""
+    parts = hook.split(".")
+    if len(parts) == 3 and parts[0] == "blocks":
+        if parts[2] == "hook_resid_pre":
+            return int(parts[1])
+        if parts[2] == "hook_resid_post":
+            return int(parts[1]) + 1
+    return None
+
+
+def _clean(model, batch, starts):
+    """Clean log-probs, residuals at the fast-path hooks, and kwargs to resume the forward."""
+    logits, cache = model.run_with_cache(batch, names_filter=list(starts))
+    _, _, pos_embed, mask = model.input_to_embed(batch)
+    return _logp(logits), cache, {"tokens": batch, "shortformer_pos_embed": pos_embed,
+                                  "attention_mask": mask}
+
+
+def _steered(model, batch, h, v, starts, cache, kw):
+    hook = _steer_hook(v)
+    if h not in starts:
+        return _logp(model.run_with_hooks(batch, fwd_hooks=[(h, hook)]))
+    return _logp(model(hook(cache[h], None), start_at_layer=starts[h], **kw))
+
+
 @torch.no_grad()
 def run_steering(model, qmodel, saes: dict[str, object], tokens: torch.Tensor,
                  n_features: int = 32, alphas: tuple[float, ...] = (0.5,), seed: int = 0,
                  batch_size: int = 4, min_count: int = 5, device: str = "cpu",
-                 log=print) -> list[dict]:
+                 log=print, _fast: bool = True) -> list[dict]:
     """Compare SAE-feature steering effects in `model` vs `qmodel`.
 
     Args:
@@ -85,11 +115,14 @@ def run_steering(model, qmodel, saes: dict[str, object], tokens: torch.Tensor,
         tokens: [n_seqs, ctx] token ids starting with BOS.
     Returns one row per (hook, feature, alpha) with keys hook, feature, alpha,
     r_norm, cos_mean, kl_steered, kl_clean, delta_norm_ref, delta_norm_q,
-    effect_ratio (see module docstring).
+    effect_ratio (see module docstring). `_fast=False` forces the full-forward
+    path for every hook (for tests).
     """
     model.eval()
     qmodel.eval()
     hooks = list(saes)
+    starts = {h: _start_layer(h) for h in hooks} if _fast else {}
+    starts = {h: L for h, L in starts.items() if L is not None}
     live, r_norm = _live_and_norms(model, saes, tokens, batch_size, min_count, device)
 
     g = torch.Generator().manual_seed(seed)
@@ -113,14 +146,13 @@ def run_steering(model, qmodel, saes: dict[str, object], tokens: torch.Tensor,
     n_tok = 0
     for i in range(0, tokens.shape[0], batch_size):
         batch = tokens[i:i + batch_size].to(device)
-        lr_c = _logp(model(batch))
-        lq_c = _logp(qmodel(batch))
+        lr_c, cache_r, kw_r = _clean(model, batch, starts)
+        lq_c, cache_q, kw_q = _clean(qmodel, batch, starts)
         kl_clean_sum += _kl(lr_c, lq_c).double().sum().item()
         n_tok += lr_c.shape[0]
         for (h, f, a), v in vecs.items():
-            fwd = [(h, _steer_hook(v))]
-            lr_s = _logp(model.run_with_hooks(batch, fwd_hooks=fwd))
-            lq_s = _logp(qmodel.run_with_hooks(batch, fwd_hooks=fwd))
+            lr_s = _steered(model, batch, h, v, starts, cache_r, kw_r)
+            lq_s = _steered(qmodel, batch, h, v, starts, cache_q, kw_q)
             d_r, d_q = lr_s - lr_c, lq_s - lq_c
             s = sums[(h, f, a)]
             s[0] += F.cosine_similarity(d_r, d_q, dim=-1).double().sum().item()
@@ -128,6 +160,7 @@ def run_steering(model, qmodel, saes: dict[str, object], tokens: torch.Tensor,
             s[2] += d_r.norm(dim=-1).double().sum().item()
             s[3] += d_q.norm(dim=-1).double().sum().item()
             del lr_s, lq_s, d_r, d_q
+        del cache_r, cache_q
 
     n = max(n_tok, 1)
     rows = []
