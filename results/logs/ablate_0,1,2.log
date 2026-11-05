@@ -1,0 +1,47 @@
+W1105 22:49:40.757000 28047 .venv/lib/python3.12/site-packages/torch/distributed/elastic/multiprocessing/redirects.py:35] NOTE: Redirects are currently not supported in MacOs.
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 7343.20it/s]
+Loaded pretrained model gpt2 into HookedTransformer
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+[ablation] quantizing block 0 only at 3 bits
+[3-bit] blocks.0.hook_resid_pre: corr=1.000 jaccard=1.000 lost=0.000% fve 0.965->0.965
+[3-bit] blocks.1.hook_resid_pre: corr=0.783 jaccard=0.111 lost=0.054% fve 0.927->-0.596
+[3-bit] blocks.2.hook_resid_pre: corr=0.863 jaccard=0.318 lost=1.558% fve 0.923->0.567
+[3-bit] blocks.3.hook_resid_pre: corr=0.818 jaccard=0.330 lost=0.994% fve 0.896->0.624
+[3-bit] blocks.4.hook_resid_pre: corr=0.843 jaccard=0.377 lost=0.785% fve 0.870->0.667
+[3-bit] blocks.5.hook_resid_pre: corr=0.845 jaccard=0.397 lost=0.378% fve 0.859->0.683
+[3-bit] blocks.6.hook_resid_pre: corr=0.862 jaccard=0.427 lost=0.292% fve 0.843->0.716
+[3-bit] blocks.7.hook_resid_pre: corr=0.874 jaccard=0.452 lost=0.165% fve 0.831->0.732
+[3-bit] blocks.8.hook_resid_pre: corr=0.879 jaccard=0.465 lost=0.112% fve 0.820->0.736
+[3-bit] blocks.9.hook_resid_pre: corr=0.883 jaccard=0.477 lost=0.068% fve 0.805->0.740
+[3-bit] blocks.10.hook_resid_pre: corr=0.900 jaccard=0.507 lost=0.074% fve 0.770->0.717
+[3-bit] blocks.11.hook_resid_pre: corr=0.894 jaccard=0.502 lost=0.051% fve 0.777->0.735
+[3-bit] weight rel err=0.1279 KL=0.1872 top1=0.776 (317s)
+[ablation] quantizing block 1 only at 3 bits
+[3-bit] blocks.0.hook_resid_pre: corr=1.000 jaccard=1.000 lost=0.000% fve 0.965->0.965
+[3-bit] blocks.1.hook_resid_pre: corr=1.000 jaccard=1.000 lost=0.000% fve 0.927->0.927
+[3-bit] blocks.2.hook_resid_pre: corr=0.788 jaccard=0.152 lost=0.043% fve 0.923->-25.909
+[3-bit] blocks.3.hook_resid_pre: corr=0.853 jaccard=0.240 lost=0.504% fve 0.896->0.593
+[3-bit] blocks.4.hook_resid_pre: corr=0.809 jaccard=0.274 lost=0.543% fve 0.870->0.655
+[3-bit] blocks.5.hook_resid_pre: corr=0.809 jaccard=0.306 lost=0.271% fve 0.859->0.676
+[3-bit] blocks.6.hook_resid_pre: corr=0.825 jaccard=0.337 lost=0.213% fve 0.843->0.717
+[3-bit] blocks.7.hook_resid_pre: corr=0.836 jaccard=0.368 lost=0.192% fve 0.831->0.735
+[3-bit] blocks.8.hook_resid_pre: corr=0.833 jaccard=0.388 lost=0.061% fve 0.820->0.746
+[3-bit] blocks.9.hook_resid_pre: corr=0.835 jaccard=0.401 lost=0.122% fve 0.805->0.750
+[3-bit] blocks.10.hook_resid_pre: corr=0.848 jaccard=0.438 lost=0.121% fve 0.770->0.731
+[3-bit] blocks.11.hook_resid_pre: corr=0.837 jaccard=0.439 lost=0.071% fve 0.777->0.744
+[3-bit] weight rel err=0.0980 KL=0.2790 top1=0.734 (315s)
+[ablation] quantizing block 2 only at 3 bits
+[3-bit] blocks.0.hook_resid_pre: corr=1.000 jaccard=1.000 lost=0.000% fve 0.965->0.965
+[3-bit] blocks.1.hook_resid_pre: corr=1.000 jaccard=1.000 lost=0.000% fve 0.927->0.927
+[3-bit] blocks.2.hook_resid_pre: corr=1.000 jaccard=1.000 lost=0.000% fve 0.923->0.923
+[3-bit] blocks.3.hook_resid_pre: corr=0.851 jaccard=0.225 lost=0.489% fve 0.896->-0.375
+[3-bit] blocks.4.hook_resid_pre: corr=0.835 jaccard=0.317 lost=0.426% fve 0.870->0.389
+[3-bit] blocks.5.hook_resid_pre: corr=0.843 jaccard=0.354 lost=0.286% fve 0.859->0.655
+[3-bit] blocks.6.hook_resid_pre: corr=0.856 jaccard=0.385 lost=0.305% fve 0.843->0.725
+[3-bit] blocks.7.hook_resid_pre: corr=0.866 jaccard=0.415 lost=0.231% fve 0.831->0.755
+[3-bit] blocks.8.hook_resid_pre: corr=0.865 jaccard=0.425 lost=0.184% fve 0.820->0.762
+[3-bit] blocks.9.hook_resid_pre: corr=0.866 jaccard=0.432 lost=0.156% fve 0.805->0.771
+[3-bit] blocks.10.hook_resid_pre: corr=0.878 jaccard=0.468 lost=0.274% fve 0.770->0.750
+[3-bit] blocks.11.hook_resid_pre: corr=0.869 jaccard=0.470 lost=0.172% fve 0.777->0.759
+[3-bit] weight rel err=0.1074 KL=0.2000 top1=0.753 (276s)
+done [0, 1, 2]

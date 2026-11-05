@@ -6,7 +6,7 @@ Quantization is evaluated almost entirely from the outside: perplexity, benchmar
 
 This project measures that directly. It takes a model, quantizes it at several bit widths, runs the same text through both versions, and encodes the residual stream at chosen layers with the **same pretrained sparse autoencoder (SAE)**. Then it compares the feature activations token by token, and goes further: which block causes the drift, which features break, and whether steering with a feature still does the same thing after quantization.
 
-> **Status: work in progress.** The pipeline, the analyses and the tests are done. No full run has been made yet.
+> **Status:** first results on GPT-2 small are in (see [Results](#results)). Gemma 2 2B is next.
 
 ## Questions
 
@@ -182,12 +182,77 @@ tests/                    offline tests on a tiny random model
 
 ## Results
 
-Results will be added here after the first full run.
+First run: GPT-2 small with `gpt2-small-res-jb`, 128 sequences of 128 tokens from `NeelNanda/pile-10k` (16,256 non-BOS tokens), plus 32 held-out calibration sequences for `awq_lite`. The commands are the ones in `notebooks/run_gpt2.ipynb`, run on CPU (Apple M3 Pro) at commit `95466a5`, with the long analyses split across parallel processes using the same settings. Every number below comes from the files in [`results/`](results/), and each run directory has a `report.md` with the full tables and figures. This is one dataset sample and one seed, so treat small differences as noise.
+
+### How many bits before features stop matching
+
+Per-channel RTN, all 12 layers measured ([report](results/gpt2_rtn/report.md)):
+
+| bits | weight rel. error | logit KL | top-1 agree | median feature corr, layer 6 | layer 11 | top-10 overlap, layer 6 |
+|---|---|---|---|---|---|---|
+| 8 | 0.011 | 0.0011 | 0.979 | 0.999 | 0.999 | 0.974 |
+| 6 | 0.045 | 0.017 | 0.921 | 0.990 | 0.986 | 0.914 |
+| 4 | 0.185 | 0.308 | 0.697 | 0.841 | 0.781 | 0.683 |
+| 3 | 0.402 | 3.139 | 0.189 | 0.066 | 0.028 | 0.167 |
+
+- There is a cliff between 4 and 3 bits. At 4 bits the median feature correlation is still 0.78 to 0.97 at layers 1 to 11; at 3 bits it falls to 0.03 to 0.25 from layer 3 onwards. Layer 0 matches exactly at every bit width, because its residual stream is the embedding, which is never quantized.
+- At 3 bits features rarely disappear (`lost_frac` is at most 1.9% at any layer). The SAE instead fires far more: the mean number of active features per token at layer 11 goes from 60.7 to 1,482, and the fraction of variance the SAE explains goes negative at every layer from 1 onwards. The quantized residual stream leaves the region the SAE was trained on.
+- The active-set Jaccard is a noisy metric for this question. At 8 bits it is only 0.93 to 0.96 even though the median correlation is 0.999 or higher, so small activations near zero switch on and off. Correlation and top-10 overlap are the more useful numbers.
+- At 6 bits the outputs move more visibly than the features: top-1 agreement drops to 0.921 while the median feature correlation stays at 0.986 or above at every layer.
+
+### Which block causes the drift
+
+Quantizing one block at a time at 3 bits, with the rest in full precision ([table](results/gpt2_rtn/ablation_table.csv), [heatmap](results/gpt2_rtn/ablation_heatmap.png)):
+
+- No single block is responsible. With any one block quantized, the median feature correlation at the hook right after it is 0.78 to 0.91, and at layer 11 it is never below 0.837, against 0.028 when all blocks are quantized.
+- The early blocks do the most damage. Block 0 gives the lowest correlation at the next hook (0.783), and block 1 gives the largest logit KL of any single block (0.279).
+- The damage from one block partly heals downstream. With only block 0 quantized, top-10 overlap is 0.366 at layer 1 and recovers to 0.720 by layer 11.
+- The blocks compound more than additively: the twelve single-block logit KLs sum to 1.66, while quantizing all of them gives 3.14.
+
+### Which features break
+
+At 3 bits, the 50 most fragile and 50 most robust live features per layer, and the rank correlation of each feature's correlation with its properties ([fragile_features.csv](results/gpt2_rtn/fragile_features.csv) with contexts and Neuronpedia links, [summary](results/gpt2_rtn/fragility_summary.csv), [scatter](results/gpt2_rtn/fragility_scatter.png)):
+
+- Strength predicts survival. The Spearman correlation between a feature's quantized-vs-reference correlation and its mean activation when active is positive at every layer: 0.84 at layer 1, falling to 0.32 at layer 11. The robust features have a median mean activation of 22.5, against 1.17 for the fragile ones.
+- Firing frequency matters much less, and in the other direction: Spearman between −0.22 and +0.01, so rarer features are slightly more robust. The fragile features also fire about four times as often after quantization (median frequency 0.0038 before, 0.0151 after).
+- Decoder norm cannot be tested with these SAEs: every decoder row has norm between 0.9999 and 1.0014, so the correlations with it are noise.
+
+### Schemes
+
+Layers 2, 6 and 10 for every scheme ([rtn](results/gpt2_rtn/report.md), [rtn g128](results/gpt2_rtn_g128/report.md), [awq_lite](results/gpt2_awq_lite/report.md), [w8a8](results/gpt2_w8a8/report.md)). Median feature correlation at layer 6, then output metrics:
+
+| bits | rtn | rtn, group 128 | awq_lite | w8a8 | logit KL (rtn / g128 / awq_lite / w8a8) | top-1 agree (rtn / g128 / awq_lite / w8a8) |
+|---|---|---|---|---|---|---|
+| 8 | 0.999 | 1.000 | 0.999 | 0.988 | 0.0011 / 0.0005 / 0.0012 / 0.057 | 0.979 / 0.987 / 0.980 / 0.866 |
+| 6 | 0.990 | 0.996 | 0.990 | 0.979 | 0.017 / 0.008 / 0.017 / 0.080 | 0.921 / 0.946 / 0.922 / 0.842 |
+| 4 | 0.841 | 0.935 | 0.851 | 0.826 | 0.308 / 0.134 / 0.373 / 0.383 | 0.697 / 0.798 / 0.678 / 0.665 |
+| 3 | 0.066 | 0.554 | 0.061 | 0.054 | 3.139 / 1.467 / 4.250 / 3.261 | 0.189 / 0.396 / 0.126 / 0.183 |
+
+- Group-wise scales (128 input rows per group) help most, and the gap widens as bits drop. At 3 bits the layer 6 correlation is 0.554 against 0.066 per channel.
+- `awq_lite` does not beat per-channel RTN here: it is level with it at 4 to 8 bits and worse at 3 bits (KL 4.25 against 3.14). The scales are chosen to minimise each layer's own output error, and that choice does not carry through the full network. This version leaves out the parts of AWQ that may matter: group-wise scales and calibration on the already-quantized prefix.
+- Quantizing activations costs more than quantizing weights at 8 bits. `w8a8` with 8-bit weights has KL 0.057 and top-1 agreement 0.866, against 0.0011 and 0.979 for weights alone, and its feature correlation at layer 10 is 0.978 against 0.999.
+
+### Does steering still work
+
+32 live features per layer, steered at `alpha = 0.5` (half the mean residual norm) on 16 sequences, RTN ([steering.csv](results/gpt2_rtn/steering.csv), [plot](results/gpt2_rtn/steering.png)). Median per-token cosine between the reference and quantized log-prob changes:
+
+| bits | layer 0 | layer 3 | layer 6 | layer 9 | layer 11 |
+|---|---|---|---|---|---|
+| 8 | 0.998 | 0.999 | 0.999 | 1.000 | 1.000 |
+| 6 | 0.981 | 0.989 | 0.990 | 0.994 | 0.997 |
+| 4 | 0.731 | 0.828 | 0.815 | 0.897 | 0.946 |
+| 3 | 0.215 | 0.098 | 0.231 | 0.437 | 0.603 |
+
+- Steering transfers almost perfectly at 6 and 8 bits.
+- At 4 bits it transfers better the later you steer: there are fewer quantized blocks between the intervention and the output.
+- At 3 bits steering mostly fails to transfer. The quantized model's response is also weaker when steering early (median effect ratio 0.50 to 0.75 at layers 0 to 5) and stronger when steering late (1.14 to 1.23 at layers 8 to 11).
 
 ## Roadmap
 
-- First full run on GPT-2 small: all three schemes, the group-size variant, and the analyses on RTN
-- The same on Gemma 2 2B with Gemma Scope
+- Run the full suite on Gemma 2 2B with Gemma Scope (`notebooks/run_gemma.ipynb`)
+- Repeat the GPT-2 runs on more text and other seeds, to see which differences hold up
+- `awq_lite` with group-wise scales and sequential calibration, to see whether full AWQ closes the gap to group-wise RTN
+- Layer ablation and fragility at 4 bits as well as 3
 - Compare feature drift against output drift across schemes, to see which one keeps the internals closest at a given bit width
 - Look at the fragile features by hand through their contexts and Neuronpedia dashboards
 - Real low-bit kernels (for example GPTQ or bitsandbytes checkpoints) alongside simulated quantization, to check the two agree

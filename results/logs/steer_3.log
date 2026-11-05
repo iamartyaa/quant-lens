@@ -1,0 +1,44 @@
+W1105 21:50:56.375000 35410 .venv/lib/python3.12/site-packages/torch/distributed/elastic/multiprocessing/redirects.py:35] NOTE: Redirects are currently not supported in MacOs.
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 7771.80it/s]
+Loaded pretrained model gpt2 into HookedTransformer
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+128 sequences x 128 tokens on cpu (32 calibration sequences)
+[3-bit] blocks.0.hook_resid_pre: corr=1.000 jaccard=1.000 lost=0.000% fve 0.965->0.965
+[3-bit] blocks.1.hook_resid_pre: corr=0.783 jaccard=0.111 lost=0.054% fve 0.927->-0.596
+[3-bit] blocks.2.hook_resid_pre: corr=0.683 jaccard=0.128 lost=1.017% fve 0.923->-0.030
+[3-bit] blocks.3.hook_resid_pre: corr=0.251 jaccard=0.098 lost=1.943% fve 0.896->-20.935
+[3-bit] blocks.4.hook_resid_pre: corr=0.101 jaccard=0.089 lost=1.086% fve 0.870->-86.765
+[3-bit] blocks.5.hook_resid_pre: corr=0.116 jaccard=0.055 lost=0.071% fve 0.859->-152.524
+[3-bit] blocks.6.hook_resid_pre: corr=0.066 jaccard=0.057 lost=0.140% fve 0.843->-71.335
+[3-bit] blocks.7.hook_resid_pre: corr=0.044 jaccard=0.050 lost=0.308% fve 0.831->-45.794
+[3-bit] blocks.8.hook_resid_pre: corr=0.038 jaccard=0.042 lost=0.092% fve 0.820->-38.379
+[3-bit] blocks.9.hook_resid_pre: corr=0.034 jaccard=0.034 lost=0.058% fve 0.805->-26.449
+[3-bit] blocks.10.hook_resid_pre: corr=0.043 jaccard=0.024 lost=0.058% fve 0.770->-31.668
+[3-bit] blocks.11.hook_resid_pre: corr=0.028 jaccard=0.018 lost=0.081% fve 0.777->-78.145
+[3-bit] weight rel err=0.4019 KL=3.1391 top1=0.189 (491s)
+wrote results/steer_parts/b3/summary.csv and summary.png
+blocks.0.hook_resid_pre: 316 live features, steering 32, r=4.68
+blocks.1.hook_resid_pre: 570 live features, steering 32, r=51.66
+blocks.2.hook_resid_pre: 874 live features, steering 32, r=56.61
+blocks.3.hook_resid_pre: 1680 live features, steering 32, r=60.75
+blocks.4.hook_resid_pre: 2669 live features, steering 32, r=65.69
+blocks.5.hook_resid_pre: 3983 live features, steering 32, r=71.04
+blocks.6.hook_resid_pre: 4920 live features, steering 32, r=77.72
+blocks.7.hook_resid_pre: 5815 live features, steering 32, r=87.24
+blocks.8.hook_resid_pre: 6700 live features, steering 32, r=101.64
+blocks.9.hook_resid_pre: 7220 live features, steering 32, r=122.61
+blocks.10.hook_resid_pre: 5956 live features, steering 32, r=155.44
+blocks.11.hook_resid_pre: 6622 live features, steering 32, r=226.45
+blocks.0.hook_resid_pre alpha=0.5: median cos=0.205
+blocks.1.hook_resid_pre alpha=0.5: median cos=0.095
+blocks.2.hook_resid_pre alpha=0.5: median cos=0.042
+blocks.3.hook_resid_pre alpha=0.5: median cos=0.079
+blocks.4.hook_resid_pre alpha=0.5: median cos=-0.025
+blocks.5.hook_resid_pre alpha=0.5: median cos=0.051
+blocks.6.hook_resid_pre alpha=0.5: median cos=0.225
+blocks.7.hook_resid_pre alpha=0.5: median cos=0.214
+blocks.8.hook_resid_pre alpha=0.5: median cos=0.337
+blocks.9.hook_resid_pre alpha=0.5: median cos=0.436
+blocks.10.hook_resid_pre alpha=0.5: median cos=0.551
+blocks.11.hook_resid_pre alpha=0.5: median cos=0.602
+wrote results/steer_parts/b3/steering.csv and steering.png

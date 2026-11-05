@@ -1,0 +1,22 @@
+W1105 21:50:56.363000 35412 .venv/lib/python3.12/site-packages/torch/distributed/elastic/multiprocessing/redirects.py:35] NOTE: Redirects are currently not supported in MacOs.
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 11210.46it/s]
+Loaded pretrained model gpt2 into HookedTransformer
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+128 sequences x 128 tokens on cpu (32 calibration sequences)
+[8-bit] blocks.2.hook_resid_pre: corr=0.993 jaccard=0.851 lost=0.000% fve 0.923->0.915
+[8-bit] blocks.6.hook_resid_pre: corr=0.988 jaccard=0.766 lost=0.024% fve 0.843->0.826
+[8-bit] blocks.10.hook_resid_pre: corr=0.978 jaccard=0.683 lost=0.032% fve 0.770->0.745
+[8-bit] weight rel err=0.0112 KL=0.0565 top1=0.866 (37s)
+[6-bit] blocks.2.hook_resid_pre: corr=0.989 jaccard=0.769 lost=0.087% fve 0.923->0.899
+[6-bit] blocks.6.hook_resid_pre: corr=0.979 jaccard=0.693 lost=0.030% fve 0.843->0.814
+[6-bit] blocks.10.hook_resid_pre: corr=0.965 jaccard=0.615 lost=0.143% fve 0.770->0.730
+[6-bit] weight rel err=0.0451 KL=0.0803 top1=0.841 (162s)
+[4-bit] blocks.2.hook_resid_pre: corr=0.948 jaccard=0.393 lost=0.974% fve 0.923->0.767
+[4-bit] blocks.6.hook_resid_pre: corr=0.826 jaccard=0.349 lost=0.024% fve 0.843->0.612
+[4-bit] blocks.10.hook_resid_pre: corr=0.790 jaccard=0.348 lost=0.063% fve 0.770->0.652
+[4-bit] weight rel err=0.1846 KL=0.3833 top1=0.665 (253s)
+[3-bit] blocks.2.hook_resid_pre: corr=0.661 jaccard=0.126 lost=0.844% fve 0.923->-0.060
+[3-bit] blocks.6.hook_resid_pre: corr=0.054 jaccard=0.056 lost=0.146% fve 0.843->-85.688
+[3-bit] blocks.10.hook_resid_pre: corr=0.027 jaccard=0.027 lost=0.169% fve 0.770->-22.113
+[3-bit] weight rel err=0.4019 KL=3.2613 top1=0.183 (245s)
+wrote results/gpt2_w8a8/summary.csv and summary.png
