@@ -97,6 +97,18 @@ def fake_quantize(w: torch.Tensor, bits: int, group_size: int | None = None) -> 
     return (q * scale).reshape(w_f.shape).to(w.dtype)
 
 
+def _fq(w: torch.Tensor, bits: int, group_size: int | None, flat_in: bool) -> torch.Tensor:
+    """fake_quantize, treating all axes but the last as one input axis when `flat_in`.
+
+    TransformerLens stores W_O per head as [n_heads, d_head, d_model], but the
+    deployed layer is one [n_heads * d_head, d_model] matrix: one scale per
+    output channel (or group) across all heads.
+    """
+    if not flat_in:
+        return fake_quantize(w, bits, group_size)
+    return fake_quantize(w.reshape(-1, w.shape[-1]), bits, group_size).reshape(w.shape)
+
+
 def fake_quantize_act(x: torch.Tensor, bits: int) -> torch.Tensor:
     """Symmetric per-token quantize-dequantize of activations.
 
@@ -145,7 +157,7 @@ def awq_lite_weights(ws: list[torch.Tensor], x: torch.Tensor, bits: int,
     for alpha in torch.linspace(0, 1, n_grid + 1).tolist():
         s = mean_abs.pow(alpha).clamp(min=1e-4)
         s = (s / (s.max() * s.min()).sqrt()).reshape(shape)
-        qs = [(fake_quantize(w.float() * s, bits, group_size) / s).to(w.dtype) for w in ws]
+        qs = [(_fq(w.float() * s, bits, group_size, x.dim() > 2) / s).to(w.dtype) for w in ws]
         err = sum(_out_err(x, w, q) for w, q in zip(ws, qs))
         if err < best[0]:
             best = (err, qs, alpha)
@@ -199,8 +211,8 @@ def quantize_model(model, bits: int, group_size: int | None = None,
         return qmodel
 
     if scheme != "awq_lite":
-        for p in params.values():
-            p.copy_(fake_quantize(p.data, bits, group_size))
+        for name, p in params.items():
+            p.copy_(_fq(p.data, bits, group_size, name.endswith("W_O")))
         if scheme == "w8a8" and act_bits < 16:
             def quant_act(x, hook):
                 return fake_quantize_act(x, act_bits)

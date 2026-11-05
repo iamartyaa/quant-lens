@@ -109,3 +109,14 @@ def test_bad_arguments_raise():
         quantize_model(m, 4, scheme="gptq")
     with pytest.raises(ValueError):
         quantize_model(m, 4, scheme="awq_lite")
+
+
+def test_w_o_scales_span_heads():
+    # W_O is one [n_heads * d_head, d_model] layer: a single scale per output
+    # column across heads, and groups may be larger than d_head
+    m = tiny_model()
+    w = quantize_model(m, 4).blocks[0].attn.W_O.detach()
+    for j in range(w.shape[-1]):
+        assert w[..., j].unique().numel() <= 15
+    g = quantize_model(m, 4, group_size=16).blocks[0].attn.W_O
+    assert g.shape == m.blocks[0].attn.W_O.shape
