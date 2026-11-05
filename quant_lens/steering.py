@@ -179,27 +179,34 @@ def run_steering(model, qmodel, saes: dict[str, object], tokens: torch.Tensor,
 
 
 def plot_steering(df: "pd.DataFrame", path: str) -> None:
-    """Median steering cosine and steered KL vs bits, one line per hook
-    (per hook and alpha / scheme when several are present)."""
-    keys = ["hook"] + [c for c in ("alpha", "scheme") if c in df and df[c].nunique() > 1]
-    fig, axes = plt.subplots(1, 2, figsize=(9, 3.4))
+    """Median steering cosine (top) and steered KL (bottom, dashed: clean) vs bits.
+
+    One column per steering strength, one line per hook (per hook and scheme
+    when several schemes are present).
+    """
+    keys = ["hook"] + (["scheme"] if "scheme" in df and df["scheme"].nunique() > 1 else [])
+    alphas = sorted(df["alpha"].unique())
+    fig, axes = plt.subplots(2, len(alphas), figsize=(4.2 * len(alphas) + 1.6, 6.4), squeeze=False)
     groups = list(df.groupby(keys, sort=False))  # run order, i.e. by layer
     colors = plt.cm.viridis([i / max(len(groups) - 1, 1) for i in range(len(groups))])
-    for (key, g), color in zip(groups, colors):
-        key = key if isinstance(key, tuple) else (key,)
-        label = " ".join([key[0].replace(".hook_resid_pre", "")] + [f"{k}={v}" for k, v in zip(keys[1:], key[1:])])
-        med = g.groupby("bits")[["cos_mean", "kl_steered", "kl_clean"]].median().sort_index(ascending=False)
-        axes[0].plot(med.index, med["cos_mean"], marker="o", color=color, label=label)
-        axes[1].plot(med.index, med["kl_steered"], marker="o", color=color, label=label)
-        axes[1].plot(med.index, med["kl_clean"], ls="--", color=color, alpha=0.7)
-    axes[0].set_title("Median steering cosine (ref vs quantized)", fontsize=10)
-    axes[1].set_title("Median KL steered (dashed: clean)", fontsize=10)
-    for ax in axes:
+    for col, alpha in enumerate(alphas):
+        top, bottom = axes[0, col], axes[1, col]
+        for (key, g), color in zip(groups, colors):
+            key = key if isinstance(key, tuple) else (key,)
+            label = " ".join([key[0].replace(".hook_resid_pre", "")] + list(map(str, key[1:])))
+            med = (g[g["alpha"] == alpha].groupby("bits")[["cos_mean", "kl_steered", "kl_clean"]]
+                   .median().sort_index(ascending=False))
+            top.plot(med.index, med["cos_mean"], marker="o", color=color, label=label)
+            bottom.plot(med.index, med["kl_steered"], marker="o", color=color)
+            bottom.plot(med.index, med["kl_clean"], ls="--", color=color, alpha=0.7)
+        top.set_title(f"Median steering cosine, alpha={alpha:g}", fontsize=10)
+        bottom.set_title(f"Median KL steered (dashed: clean), alpha={alpha:g}", fontsize=10)
+    for ax in axes.flat:
         ax.set_xlabel("weight bits")
         ax.set_xticks(sorted(df["bits"].unique()))
         ax.invert_xaxis()
         ax.grid(alpha=0.3)
-    axes[0].legend(fontsize=8)
-    fig.tight_layout()
+    fig.legend(*axes[0, 0].get_legend_handles_labels(), loc="center right", fontsize=8)
+    fig.tight_layout(rect=(0, 0, 1 - 1.4 / fig.get_figwidth(), 1))
     fig.savefig(path, dpi=150)
     plt.close(fig)

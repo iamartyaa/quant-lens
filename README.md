@@ -197,6 +197,8 @@ Per-channel RTN, all 12 layers measured ([report](results/gpt2_rtn/report.md)):
 | 4 | 0.185 | 0.308 | 0.697 | 0.841 | 0.781 | 0.683 |
 | 3 | 0.402 | 3.139 | 0.189 | 0.066 | 0.028 | 0.167 |
 
+![Median feature correlation, active-set Jaccard, lost features and SAE variance explained against weight bits, one line per layer](results/gpt2_rtn/summary.png)
+
 - There is a cliff between 4 and 3 bits. At 4 bits the median feature correlation is still 0.78 to 0.97 at layers 1 to 11; at 3 bits it falls to 0.03 to 0.25 from layer 3 onwards. Layer 0 matches exactly at every bit width, because its residual stream is the embedding, which is never quantized.
 - At 3 bits features rarely disappear (`lost_frac` is at most 1.9% at any layer). The SAE instead fires far more: the mean number of active features per token at layer 11 goes from 60.7 to 1,482, and the fraction of variance the SAE explains goes negative at every layer from 1 onwards. The quantized residual stream leaves the region the SAE was trained on.
 - The active-set Jaccard is a noisy metric for this question. At 8 bits it is only 0.93 to 0.96 even though the median correlation is 0.999 or higher, so small activations near zero switch on and off. Correlation and top-10 overlap are the more useful numbers.
@@ -205,6 +207,8 @@ Per-channel RTN, all 12 layers measured ([report](results/gpt2_rtn/report.md)):
 ### Which block causes the drift
 
 Quantizing one block at a time at 3 bits, with the rest in full precision ([table](results/gpt2_rtn/ablation_table.csv), [heatmap](results/gpt2_rtn/ablation_heatmap.png)):
+
+![Median feature correlation at every hook when only one block is quantized to 3 bits](results/gpt2_rtn/ablation_heatmap.png)
 
 - No single block is responsible. With any one block quantized, the median feature correlation at the hook right after it is 0.78 to 0.91, and at layer 11 it is never below 0.837, against 0.028 when all blocks are quantized.
 - The early blocks do the most damage. Block 0 gives the lowest correlation at the next hook (0.783), and block 1 gives the largest logit KL of any single block (0.279).
@@ -245,6 +249,8 @@ Layers 2, 6 and 10 for every scheme ([rtn](results/gpt2_rtn/report.md), [rtn g12
 | 4 | 0.731 | 0.828 | 0.815 | 0.897 | 0.946 |
 | 3 | 0.215 | 0.098 | 0.231 | 0.437 | 0.603 |
 
+![Median steering cosine and steered KL against weight bits, one line per layer](results/gpt2_rtn/steering.png)
+
 - Steering transfers almost perfectly at 6 and 8 bits.
 - At 4 bits it transfers better the later you steer: there are fewer quantized blocks between the intervention and the output.
 - At 3 bits steering mostly fails to transfer. The quantized model's response is also weaker when steering early (median effect ratio 0.50 to 0.75 at layers 0 to 5) and stronger when steering late (1.14 to 1.23 at layers 8 to 11).
@@ -276,6 +282,8 @@ Run with `notebooks/run_gpt2_followups.ipynb` on a Colab T4 at commit `803e261`.
 - At 4 bits the blocks compound only a little: the single-block KLs sum to 0.25, against 0.31 with every block quantized. At 3 bits the same comparison was 1.66 against 3.14.
 - Strength predicts survival even more clearly at 4 bits: Spearman between a feature's correlation and its mean activation when active is between 0.81 and 0.88 at every layer from 1 to 11. Fragile and robust features fire equally often (median frequency 0.0004 for both), but the robust ones are about 35 times stronger (median mean activation 23.8 against 0.68).
 - Steering with `alpha` 0.25, 0.5 and 1.0: at 4 bits stronger steering transfers better, especially early in the network (median cosine at layer 1 rises from 0.61 to 0.88 as `alpha` goes from 0.25 to 1.0). Weak steering is exaggerated by the 4-bit model (effect ratio up to 1.47 at `alpha` 0.25). At 3 bits no strength makes steering transfer: the best median cosine at any layer is 0.67.
+
+  ![Steering transfer at three steering strengths, one column per alpha](results/gpt2_rtn_4bit/steering.png)
 - The steering medians come from 32 sampled features per layer and are noisy. Where this run and the first run sampled the same features (layers 0 to 7), the per-feature cosines agree to 0.0002. At layers 8 to 11 slightly different live-feature counts on CPU and GPU led to a different sample, and the medians differ by up to 0.07.
 
 ## Roadmap
