@@ -4,11 +4,14 @@ For each bit width, build a quantized copy of the model, run the same tokens
 through both models, encode the residual stream at each chosen layer with the
 *same* pretrained SAE, and compare the resulting feature activations.
 
+Optional analyses on top of the bit-width sweep, all at --analysis-bits:
+--ablate-layers (quantize one block at a time), --fragility (which features
+break) and --steering (do feature interventions transfer).
+
 Example (GPU recommended, works on a free Colab T4):
 
-    python -m quant_lens.experiment --model gpt2 \
-        --sae-release gpt2-small-res-jb --layers 2 6 10 \
-        --bits 8 6 4 --n-seqs 128 --ctx 128 --out results/
+    python -m quant_lens.experiment --model gpt2 --layers 2 6 10 \
+        --bits 8 6 4 --scheme rtn --n-seqs 128 --ctx 128 --out results/
 """
 
 from __future__ import annotations
@@ -43,7 +46,7 @@ class SimpleSAE(torch.nn.Module):
         return f @ self.W_dec + self.b_dec
 
 
-def load_pretrained_sae(release: str, sae_id: str, device: str):
+def load_pretrained_sae(release: str, sae_id: str, device: str) -> torch.nn.Module:
     """Load a pretrained SAE with sae_lens (handles old and new return types)."""
     from sae_lens import SAE
 
@@ -54,6 +57,7 @@ def load_pretrained_sae(release: str, sae_id: str, device: str):
 
 
 def d_sae_of(sae) -> int:
+    """Dictionary size of an SAE (sae_lens config or raw W_enc)."""
     if hasattr(sae, "cfg") and hasattr(sae.cfg, "d_sae"):
         return int(sae.cfg.d_sae)
     return int(sae.W_enc.shape[1])
@@ -78,6 +82,7 @@ def tokenize(model, texts: list[str], ctx: int, n_seqs: int) -> torch.Tensor:
 
 
 def load_texts(dataset: str | None, n_docs: int) -> list[str]:
+    """First `n_docs` texts of a streaming HF dataset, or BUILTIN_TEXTS if None."""
     if dataset is None:
         return BUILTIN_TEXTS
     from datasets import load_dataset
@@ -165,14 +170,85 @@ BUILTIN_TEXTS = [
 ] * 8
 
 
-def main():
+def run_suite(model, saes: dict[str, object], tokens: torch.Tensor, calib_tokens: torch.Tensor | None,
+              args: argparse.Namespace, layers: dict[str, int],
+              neuronpedia_template: str | None = None, device: str = "cpu",
+              log=print) -> "pd.DataFrame":
+    """Run the sweep plus any analyses requested in `args`, writing everything to args.out.
+
+    Split out of `main` so the whole CLI path can be tested on a tiny model.
+    `layers` maps each SAE hook to its layer number (used for Neuronpedia links).
+    """
+    import pandas as pd
+
+    from .plots import plot_summary
+
+    out = args.out
+    os.makedirs(out, exist_ok=True)
+    qkw = dict(group_size=args.group_size, scheme=args.scheme, calib_tokens=calib_tokens,
+               act_bits=args.act_bits)
+    per_feature_dir = (os.path.join(out, "per_feature")
+                       if args.save_per_feature or args.fragility else None)
+    rows = run_experiment(model, saes, tokens, args.bits, batch_size=args.batch_size, device=device,
+                          per_feature_dir=per_feature_dir, log=log, **qkw)
+    df = pd.DataFrame(rows)
+    df.to_csv(os.path.join(out, "summary.csv"), index=False)
+    plot_summary(df, os.path.join(out, "summary.png"))
+    with open(os.path.join(out, "config.json"), "w") as f:
+        json.dump(vars(args), f, indent=2)
+    log(f"wrote {out}/summary.csv and summary.png")
+
+    bits = args.analysis_bits if args.analysis_bits is not None else min(args.bits)
+    if args.ablate_layers:
+        from .ablation import run_ablation, write_ablation
+
+        abl = run_ablation(model, saes, tokens, bits, batch_size=args.batch_size, device=device,
+                           log=log, **qkw)
+        write_ablation(abl, out)
+        log(f"wrote {out}/ablation.csv, ablation_table.csv, ablation_heatmap.png")
+    if args.fragility:
+        from .fragility import analyze_fragility
+
+        if bits not in args.bits:
+            raise ValueError(f"--analysis-bits {bits} must be one of --bits for --fragility")
+        analyze_fragility(model, saes, tokens, per_feature_dir, bits, out, layers,
+                          neuronpedia_template, n=args.fragility_n, batch_size=args.batch_size,
+                          device=device)
+        log(f"wrote {out}/fragile_features.csv, fragility_summary.csv, fragility_scatter.png")
+    if args.steering:
+        from .steering import plot_steering, run_steering
+
+        steer_rows = []
+        for b in sorted(set(args.bits) | {bits}, reverse=True):
+            qmodel = quantize_model(model, b, batch_size=args.batch_size, **qkw).eval()
+            for r in run_steering(model, qmodel, saes, tokens[:args.steer_seqs],
+                                  n_features=args.steer_features, alphas=tuple(args.steer_alphas),
+                                  batch_size=min(args.batch_size, 4), device=device, log=log):
+                steer_rows.append({"bits": b, "scheme": args.scheme, **r})
+            del qmodel
+        sdf = pd.DataFrame(steer_rows)
+        sdf.to_csv(os.path.join(out, "steering.csv"), index=False)
+        plot_steering(sdf, os.path.join(out, "steering.png"))
+        log(f"wrote {out}/steering.csv and steering.png")
+    return df
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Command-line interface; model-specific defaults come from the registry."""
+    from .quantize import SCHEMES
+
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--model", default="gpt2")
-    p.add_argument("--sae-release", default="gpt2-small-res-jb")
-    p.add_argument("--hook-template", default="blocks.{layer}.hook_resid_pre")
-    p.add_argument("--layers", type=int, nargs="+", default=[2, 6, 10])
+    p.add_argument("--model", default="gpt2", help="TransformerLens model name, e.g. gpt2 or gemma-2-2b")
+    p.add_argument("--sae-release", default=None, help="SAELens release (default: from registry)")
+    p.add_argument("--hook-template", default=None, help="e.g. blocks.{layer}.hook_resid_pre")
+    p.add_argument("--sae-id-template", default=None, help="e.g. layer_{layer}/width_16k/canonical")
+    p.add_argument("--layers", type=int, nargs="+", default=None)
     p.add_argument("--bits", type=int, nargs="+", default=[8, 6, 4])
+    p.add_argument("--scheme", choices=SCHEMES, default="rtn")
     p.add_argument("--group-size", type=int, default=None)
+    p.add_argument("--act-bits", type=int, default=8, help="activation bits for w8a8")
+    p.add_argument("--calib-seqs", type=int, default=32,
+                   help="calibration sequences for awq_lite, taken after the evaluation text")
     p.add_argument("--dataset", default="NeelNanda/pile-10k",
                    help="HF dataset with a 'text' column; 'builtin' for a tiny offline sample")
     p.add_argument("--n-docs", type=int, default=2000)
@@ -181,37 +257,48 @@ def main():
     p.add_argument("--batch-size", type=int, default=8)
     p.add_argument("--out", default="results")
     p.add_argument("--save-per-feature", action="store_true")
-    args = p.parse_args()
+    p.add_argument("--analysis-bits", type=int, default=None,
+                   help="bit width for ablation/fragility (default: min of --bits)")
+    p.add_argument("--ablate-layers", action="store_true",
+                   help="quantize one block at a time and measure drift at every SAE hook")
+    p.add_argument("--fragility", action="store_true", help="per-feature fragility analysis")
+    p.add_argument("--fragility-n", type=int, default=50)
+    p.add_argument("--steering", action="store_true", help="steering transfer analysis")
+    p.add_argument("--steer-features", type=int, default=32)
+    p.add_argument("--steer-alphas", type=float, nargs="+", default=[0.5],
+                   help="steering strength in units of the mean residual norm at the hook")
+    p.add_argument("--steer-seqs", type=int, default=16)
+    return p
+
+
+def main():
+    args = build_parser().parse_args()
 
     from transformer_lens import HookedTransformer
+
+    from .registry import resolve
+
+    spec = resolve(args.model, args.sae_release, args.hook_template, args.sae_id_template, args.layers)
+    args.sae_release, args.hook_template = spec.sae_release, spec.hook_template
+    args.sae_id_template, args.layers = spec.sae_id_template, list(spec.default_layers)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.manual_seed(0)
     model = HookedTransformer.from_pretrained(args.model, device=device)
-    saes = {}
+    saes, layers = {}, {}
     for layer in args.layers:
         hook = args.hook_template.format(layer=layer)
-        saes[hook] = load_pretrained_sae(args.sae_release, hook, device)
+        saes[hook] = load_pretrained_sae(args.sae_release, args.sae_id_template.format(layer=layer), device)
+        layers[hook] = layer
 
     texts = load_texts(None if args.dataset == "builtin" else args.dataset, args.n_docs)
-    tokens = tokenize(model, texts, args.ctx, args.n_seqs)
-    print(f"{tokens.shape[0]} sequences x {tokens.shape[1]} tokens on {device}")
-
-    os.makedirs(args.out, exist_ok=True)
-    rows = run_experiment(model, saes, tokens, args.bits, args.group_size, args.batch_size,
-                          device=device,
-                          per_feature_dir=os.path.join(args.out, "per_feature") if args.save_per_feature else None)
-
-    import pandas as pd
-
-    df = pd.DataFrame(rows)
-    df.to_csv(os.path.join(args.out, "summary.csv"), index=False)
-    with open(os.path.join(args.out, "config.json"), "w") as f:
-        json.dump(vars(args), f, indent=2)
-    from .plots import plot_summary
-
-    plot_summary(df, os.path.join(args.out, "summary.png"))
-    print(f"wrote {args.out}/summary.csv and summary.png")
+    all_tokens = tokenize(model, texts, args.ctx, args.n_seqs + args.calib_seqs)
+    tokens, calib = all_tokens[:args.n_seqs], all_tokens[args.n_seqs:]
+    if args.scheme == "awq_lite" and len(calib) == 0:
+        raise ValueError("not enough text for calibration; raise --n-docs or lower --n-seqs")
+    print(f"{tokens.shape[0]} sequences x {tokens.shape[1]} tokens on {device} "
+          f"({calib.shape[0]} calibration sequences)")
+    run_suite(model, saes, tokens, calib, args, layers, spec.neuronpedia_template, device)
 
 
 if __name__ == "__main__":
