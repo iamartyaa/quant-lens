@@ -1,0 +1,39 @@
+{
+  "model": "gpt2",
+  "sae_release": "gpt2-small-res-jb",
+  "hook_template": "blocks.{layer}.hook_resid_pre",
+  "sae_id_template": "blocks.{layer}.hook_resid_pre",
+  "layers": [
+    2,
+    6,
+    10
+  ],
+  "bits": [
+    8,
+    6,
+    4,
+    3
+  ],
+  "scheme": "rtn",
+  "group_size": null,
+  "act_bits": 8,
+  "calib_seqs": 32,
+  "dataset": "NeelNanda/pile-10k",
+  "n_docs": 3000,
+  "doc_offset": 5000,
+  "n_seqs": 512,
+  "ctx": 128,
+  "batch_size": 8,
+  "out": "results/robust/gpt2_rtn",
+  "save_per_feature": false,
+  "analysis_bits": null,
+  "ablate_layers": false,
+  "fragility": false,
+  "fragility_n": 50,
+  "steering": false,
+  "steer_features": 32,
+  "steer_alphas": [
+    0.5
+  ],
+  "steer_seqs": 16
+}

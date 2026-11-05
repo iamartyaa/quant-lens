@@ -91,7 +91,7 @@ For a sample of live features (`--steer-features`), add `alpha * r * d` at every
 
 ## Run it
 
-On Colab, open `notebooks/run_gpt2.ipynb` (T4 GPU) or `notebooks/run_gemma.ipynb` (A100; the float32 reference plus a quantized copy take roughly 21 GB). Locally:
+On Colab, open `notebooks/run_gpt2.ipynb` (T4 GPU), `notebooks/run_gpt2_followups.ipynb` (T4; the robustness, AWQ and 4-bit runs described under Results) or `notebooks/run_gemma.ipynb` (A100; the float32 reference plus a quantized copy take roughly 21 GB). Locally:
 
 ```bash
 pip install -e .
@@ -140,7 +140,7 @@ Then write a report for any run directory:
 python -m quant_lens.report results/gpt2_rtn
 ```
 
-Other useful options: `--dataset` (default `NeelNanda/pile-10k`; `builtin` uses a tiny offline sample), `--n-docs`, `--n-seqs` (default 128), `--ctx` (default 128), `--batch-size` (default 8), `--save-per-feature`.
+Other useful options: `--dataset` (default `NeelNanda/pile-10k`; `builtin` uses a tiny offline sample), `--n-docs`, `--doc-offset` (skip that many documents first, to sample a different slice), `--n-seqs` (default 128), `--ctx` (default 128), `--batch-size` (default 8), `--save-per-feature`.
 
 ## Outputs
 
@@ -184,7 +184,7 @@ tests/                    offline tests on a tiny random model
 
 ## Results
 
-First run: GPT-2 small with `gpt2-small-res-jb`, 128 sequences of 128 tokens from `NeelNanda/pile-10k` (16,256 non-BOS tokens), plus 32 held-out calibration sequences for `awq_lite`. The commands are the ones in `notebooks/run_gpt2.ipynb`, run on CPU (Apple M3 Pro) at commit `95466a5`, with the long analyses split across parallel processes using the same settings. Every number below comes from the files in [`results/`](results/), and each run directory has a `report.md` with the full tables and figures. This is one dataset sample and one seed, so treat small differences as noise.
+First run: GPT-2 small with `gpt2-small-res-jb`, 128 sequences of 128 tokens from `NeelNanda/pile-10k` (16,256 non-BOS tokens), plus 32 held-out calibration sequences for `awq_lite`. The commands are the ones in `notebooks/run_gpt2.ipynb`, run on CPU (Apple M3 Pro) at commit `95466a5`, with the long analyses split across parallel processes using the same settings. Every number below comes from the files in [`results/`](results/), and each run directory has a `report.md` with the full tables and figures. The [follow-up runs](#follow-up-runs) at the end repeat the sweep on a second slice of the data and run on a Colab T4 GPU.
 
 ### How many bits before features stop matching
 
@@ -231,7 +231,7 @@ Layers 2, 6 and 10 for every scheme ([rtn](results/gpt2_rtn/report.md), [rtn g12
 | 3 | 0.066 | 0.554 | 0.061 | 0.054 | 3.139 / 1.467 / 4.250 / 3.261 | 0.189 / 0.396 / 0.126 / 0.183 |
 
 - Group-wise scales (128 input rows per group) help most, and the gap widens as bits drop. At 3 bits the layer 6 correlation is 0.554 against 0.066 per channel.
-- `awq_lite` does not beat per-channel RTN here: it is level with it at 4 to 8 bits and worse at 3 bits (KL 4.25 against 3.14). The scales are chosen to minimise each layer's own output error, and that choice does not carry through the full network. This version leaves out the parts of AWQ that may matter: group-wise scales and calibration on the already-quantized prefix.
+- `awq_lite` does not beat per-channel RTN here: it is close at 6 and 8 bits, somewhat worse at 4 bits (KL 0.373 against 0.308) and clearly worse at 3 bits (4.25 against 3.14). The scales are chosen to minimise each layer's own output error, and that choice does not carry through the full network. The follow-up runs below add group-wise scales and sequential calibration.
 - Quantizing activations costs more than quantizing weights at 8 bits. `w8a8` with 8-bit weights has KL 0.057 and top-1 agreement 0.866, against 0.0011 and 0.979 for weights alone, and its feature correlation at layer 10 is 0.978 against 0.999.
 
 ### Does steering still work
@@ -249,12 +249,40 @@ Layers 2, 6 and 10 for every scheme ([rtn](results/gpt2_rtn/report.md), [rtn g12
 - At 4 bits it transfers better the later you steer: there are fewer quantized blocks between the intervention and the output.
 - At 3 bits steering mostly fails to transfer. The quantized model's response is also weaker when steering early (median effect ratio 0.50 to 0.75 at layers 0 to 5) and stronger when steering late (1.14 to 1.23 at layers 8 to 11).
 
+### Follow-up runs
+
+Run with `notebooks/run_gpt2_followups.ipynb` on a Colab T4 at commit `803e261`. The sweep on the T4 reproduces the CPU numbers of the first run to within 3e-5 in median feature correlation and 2e-5 in logit KL, so the two sets of results can be compared directly.
+
+**A second slice of the data.** All four schemes again on documents 5,000 onwards of the Pile sample, with 512 sequences (65,024 tokens, four times the first run) ([results/robust](results/robust/)). Top-1 agreement stays within 0.03 of the first run for every scheme and bit width, group-wise RTN is still the best scheme at every bit width, `w8a8` is still the worst from 4 bits up, and `awq_lite` is again worse than RTN at 3 and 4 bits. The least stable numbers are the 3-bit feature correlations in the middle of the network: group-wise RTN at layer 6 went from 0.554 to 0.395.
+
+**Fuller AWQ.** Group-wise scales and sequential calibration (`awq_seq`), on the original slice at layers 2, 6 and 10 ([awq_lite g128](results/gpt2_awq_lite_g128/report.md), [awq_seq](results/gpt2_awq_seq/report.md), [awq_seq g128](results/gpt2_awq_seq_g128/report.md)):
+
+| bits | | rtn | awq_lite | awq_seq | rtn g128 | awq_lite g128 | awq_seq g128 |
+|---|---|---|---|---|---|---|---|
+| 4 | logit KL | 0.308 | 0.373 | 0.386 | 0.134 | 0.132 | 0.147 |
+| 4 | top-1 agree | 0.697 | 0.678 | 0.666 | 0.798 | 0.801 | 0.792 |
+| 4 | median feature corr, layer 6 | 0.841 | 0.851 | 0.829 | 0.935 | 0.933 | 0.933 |
+| 3 | logit KL | 3.139 | 4.250 | 3.657 | 1.467 | 1.212 | 1.378 |
+| 3 | top-1 agree | 0.189 | 0.126 | 0.170 | 0.396 | 0.464 | 0.422 |
+| 3 | median feature corr, layer 6 | 0.066 | 0.061 | 0.022 | 0.554 | 0.210 | 0.123 |
+
+- With group-wise scales, AWQ gives the best 3-bit outputs of any scheme here (KL 1.21 against 1.47 for group-wise RTN). At 4 bits the three group-wise schemes are within 0.015 KL of each other.
+- At 3 bits the outputs and the features disagree about which scheme is better. Group-wise AWQ has better outputs and slightly better top-10 overlap at layer 6 (0.444 against 0.404), but a much lower median feature correlation at layers 6 and 10 (0.210 and 0.246 against 0.554 and 0.378), and the SAE's variance explained at layer 6 falls to −120 against +0.30. One possible reading is that a few tokens get very large residual errors, which wrecks correlation and variance explained without changing the top features of most tokens. I have not checked this yet.
+- Sequential calibration does not help in this implementation. Per channel it narrows the gap to RTN at 3 bits (KL 3.66 against 4.25 for `awq_lite`) but is still worse than plain RTN (3.14), and group-wise it is worse than `awq_lite` (1.38 against 1.21).
+
+**Ablation, fragility and steering at 4 bits** ([results/gpt2_rtn_4bit](results/gpt2_rtn_4bit/report.md)):
+
+- Quantizing one block at 4 bits barely moves the features: the median correlation at the next hook is at least 0.968, and at least 0.955 anywhere downstream. Block 2 does the most damage, with the largest single-block KL (0.038) and the lowest top-1 agreement (0.893).
+- At 4 bits the blocks compound only a little: the single-block KLs sum to 0.25, against 0.31 with every block quantized. At 3 bits the same comparison was 1.66 against 3.14.
+- Strength predicts survival even more clearly at 4 bits: Spearman between a feature's correlation and its mean activation when active is between 0.81 and 0.88 at every layer from 1 to 11. Fragile and robust features fire equally often (median frequency 0.0004 for both), but the robust ones are about 35 times stronger (median mean activation 23.8 against 0.68).
+- Steering with `alpha` 0.25, 0.5 and 1.0: at 4 bits stronger steering transfers better, especially early in the network (median cosine at layer 1 rises from 0.61 to 0.88 as `alpha` goes from 0.25 to 1.0). Weak steering is exaggerated by the 4-bit model (effect ratio up to 1.47 at `alpha` 0.25). At 3 bits no strength makes steering transfer: the best median cosine at any layer is 0.67.
+- The steering medians come from 32 sampled features per layer and are noisy. Where this run and the first run sampled the same features (layers 0 to 7), the per-feature cosines agree to 0.0002. At layers 8 to 11 slightly different live-feature counts on CPU and GPU led to a different sample, and the medians differ by up to 0.07.
+
 ## Roadmap
 
 - Run the full suite on Gemma 2 2B with Gemma Scope (`notebooks/run_gemma.ipynb`)
-- Repeat the GPT-2 runs on more text and other seeds, to see which differences hold up
-- `awq_lite` with group-wise scales and sequential calibration, to see whether full AWQ closes the gap to group-wise RTN
-- Layer ablation and fragility at 4 bits as well as 3
+- Find out why group-wise AWQ at 3 bits has better outputs but worse feature correlations: look at the per-token residual errors and the tokens with the largest ones
+- Steering with more features per layer, so the medians are less noisy
 - Compare feature drift against output drift across schemes, to see which one keeps the internals closest at a given bit width
 - Look at the fragile features by hand through their contexts and Neuronpedia dashboards
 - Real low-bit kernels (for example GPTQ or bitsandbytes checkpoints) alongside simulated quantization, to check the two agree
