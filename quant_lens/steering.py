@@ -150,11 +150,12 @@ def plot_steering(df: "pd.DataFrame", path: str) -> None:
     (per hook and alpha / scheme when several are present)."""
     keys = ["hook"] + [c for c in ("alpha", "scheme") if c in df and df[c].nunique() > 1]
     fig, axes = plt.subplots(1, 2, figsize=(9, 3.4))
-    for i, (key, g) in enumerate(df.groupby(keys)):
+    groups = list(df.groupby(keys, sort=False))  # run order, i.e. by layer
+    colors = plt.cm.viridis([i / max(len(groups) - 1, 1) for i in range(len(groups))])
+    for (key, g), color in zip(groups, colors):
         key = key if isinstance(key, tuple) else (key,)
         label = " ".join([key[0].replace(".hook_resid_pre", "")] + [f"{k}={v}" for k, v in zip(keys[1:], key[1:])])
         med = g.groupby("bits")[["cos_mean", "kl_steered", "kl_clean"]].median().sort_index(ascending=False)
-        color = f"C{i % 10}"
         axes[0].plot(med.index, med["cos_mean"], marker="o", color=color, label=label)
         axes[1].plot(med.index, med["kl_steered"], marker="o", color=color, label=label)
         axes[1].plot(med.index, med["kl_clean"], ls="--", color=color, alpha=0.7)
@@ -162,6 +163,7 @@ def plot_steering(df: "pd.DataFrame", path: str) -> None:
     axes[1].set_title("Median KL steered (dashed: clean)", fontsize=10)
     for ax in axes:
         ax.set_xlabel("weight bits")
+        ax.set_xticks(sorted(df["bits"].unique()))
         ax.invert_xaxis()
         ax.grid(alpha=0.3)
     axes[0].legend(fontsize=8)
