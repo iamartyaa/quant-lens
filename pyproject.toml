@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quant-lens"
+version = "0.1.0"
+description = "Does weight quantization change what a model represents inside? SAE feature drift under quantization."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.1",
+    "transformer_lens>=2.0,<4",
+    "sae-lens",
+    "datasets",
+    "pandas",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.urls]
+Homepage = "https://github.com/iamartyaa/quant-lens"
+
+[tool.setuptools]
+packages = ["quant_lens"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,3 +1,4 @@
+# Same runtime deps as pyproject.toml; prefer `pip install -e ".[dev]"`.
 torch>=2.1
 transformer_lens>=2.0,<4
 sae-lens
