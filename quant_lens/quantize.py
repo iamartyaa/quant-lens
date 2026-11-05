@@ -21,6 +21,11 @@ which matches common practice. Schemes (`SCHEMES`):
   W_O / W_out) as real AWQ does, so we never touch the previous op. Weights
   that read the same input (Q, K, V; W_in and W_gate) share one s and alpha.
   alpha = 0 is plain RTN, so on the calibration data awq_lite is never worse.
+  Every layer is calibrated on full-precision activations.
+- awq_seq: awq_lite with sequential (GPTQ-style, error-aware) calibration.
+  Blocks are processed in order, and block i is calibrated on inputs from the
+  copy whose earlier blocks are already quantized, captured in one pass before
+  block i itself is quantized.
 - w8a8: RTN weights plus simulated symmetric per-token quantization (at
   `act_bits`) of the input of every quantized linear, applied by permanent
   TransformerLens hooks on the quantized copy.
@@ -42,7 +47,7 @@ import torch
 # `_W_K` / `_W_V` are the grouped-query attention names (e.g. Gemma 2) and
 # `W_gate` is the gated-MLP input projection.
 DEFAULT_TARGETS = ("W_Q", "W_K", "W_V", "_W_K", "_W_V", "W_O", "W_in", "W_gate", "W_out")
-SCHEMES = ("rtn", "awq_lite", "w8a8")
+SCHEMES = ("rtn", "awq_lite", "awq_seq", "w8a8")
 
 # Hook point (within blocks.{i}) holding the input of each target weight.
 # W_O reads hook_z [batch, pos, n_heads, d_head], so its input channels are
@@ -195,22 +200,22 @@ def quantize_model(model, bits: int, group_size: int | None = None,
 
     Args:
         scheme: one of `SCHEMES`.
-        calib_tokens: [n, ctx] calibration tokens (BOS first), required by awq_lite.
+        calib_tokens: [n, ctx] calibration tokens (BOS first), required by awq_lite / awq_seq.
         act_bits: activation bit width for w8a8.
         blocks: only quantize these transformer blocks (None = all).
         batch_size: batch size for the calibration forward passes.
     """
     if scheme not in SCHEMES:
         raise ValueError(f"unknown scheme {scheme!r}, expected one of {SCHEMES}")
-    if scheme == "awq_lite" and calib_tokens is None:
-        raise ValueError("awq_lite needs calib_tokens")
+    if scheme.startswith("awq") and calib_tokens is None:
+        raise ValueError(f"{scheme} needs calib_tokens")
     qmodel = copy.deepcopy(model)
     params = {name: p for name, p in qmodel.named_parameters()
               if name.split(".")[-1] in targets and (blocks is None or block_of(name) in blocks)}
     if bits >= 16 and (scheme != "w8a8" or act_bits >= 16):
         return qmodel
 
-    if scheme != "awq_lite":
+    if not scheme.startswith("awq"):
         for name, p in params.items():
             p.copy_(_fq(p.data, bits, group_size, name.endswith("W_O")))
         if scheme == "w8a8" and act_bits < 16:
@@ -223,14 +228,20 @@ def quantize_model(model, bits: int, group_size: int | None = None,
     groups = defaultdict(list)  # input hook -> params that read it
     for name, p in params.items():
         groups[_input_hook(name)].append(p)
-    # ponytail: every layer is calibrated on full-precision activations; real AWQ
-    # calibrates sequentially on the already-quantized prefix. Add that if
-    # low-bit error compounding across layers matters.
-    xs = _calib_inputs(model, calib_tokens, list(groups), batch_size)
-    for h, ps in groups.items():
-        qs, _ = awq_lite_weights([p.data for p in ps], xs[h], bits, group_size)
-        for p, q in zip(ps, qs):
-            p.copy_(q)
+    # awq_lite: one pass on the full-precision model for every layer.
+    # awq_seq: one pass per block on qmodel, whose earlier blocks are quantized.
+    # ponytail: each awq_seq pass runs the whole model (n_layers full forwards);
+    # stop at block i if calibration time on deep models matters.
+    seq = scheme == "awq_seq"
+    stages = defaultdict(list)
+    for h in groups:
+        stages[block_of(h) if seq else 0].append(h)
+    for _, hooks in sorted(stages.items()):
+        xs = _calib_inputs(qmodel if seq else model, calib_tokens, hooks, batch_size)
+        for h in hooks:
+            qs, _ = awq_lite_weights([p.data for p in groups[h]], xs[h], bits, group_size)
+            for p, q in zip(groups[h], qs):
+                p.copy_(q)
     return qmodel
 
 

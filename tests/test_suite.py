@@ -21,7 +21,7 @@ def _inputs():
     return m, saes, toks[:8], toks[8:]
 
 
-@pytest.mark.parametrize("scheme", ["rtn", "awq_lite", "w8a8"])
+@pytest.mark.parametrize("scheme", ["rtn", "awq_lite", "awq_seq", "w8a8"])
 def test_sweep_each_scheme(tmp_path, scheme):
     m, saes, toks, calib = _inputs()
     args = build_parser().parse_args(["--scheme", scheme, "--bits", "8", "3", "--out", str(tmp_path)])

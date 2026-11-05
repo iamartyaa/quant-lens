@@ -250,7 +250,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--group-size", type=int, default=None)
     p.add_argument("--act-bits", type=int, default=8, help="activation bits for w8a8")
     p.add_argument("--calib-seqs", type=int, default=32,
-                   help="calibration sequences for awq_lite, taken after the evaluation text")
+                   help="calibration sequences for awq_lite / awq_seq, taken after the evaluation text")
     p.add_argument("--dataset", default="NeelNanda/pile-10k",
                    help="HF dataset with a 'text' column; 'builtin' for a tiny offline sample")
     p.add_argument("--n-docs", type=int, default=2000)
@@ -302,7 +302,7 @@ def main() -> None:
     texts = load_texts(None if args.dataset == "builtin" else args.dataset, args.n_docs, args.doc_offset)
     all_tokens = tokenize(model, texts, args.ctx, args.n_seqs + args.calib_seqs)
     tokens, calib = all_tokens[:args.n_seqs], all_tokens[args.n_seqs:]
-    if args.scheme == "awq_lite" and len(calib) == 0:
+    if args.scheme.startswith("awq") and len(calib) == 0:
         raise ValueError("not enough text for calibration; raise --n-docs or lower --n-seqs")
     print(f"{tokens.shape[0]} sequences x {tokens.shape[1]} tokens on {device} "
           f"({calib.shape[0]} calibration sequences)")

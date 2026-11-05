@@ -1,6 +1,7 @@
 import pytest
 import torch
 
+import quant_lens.quantize as qz
 from quant_lens.quantize import (INPUT_HOOKS, SCHEMES, awq_lite_weights, fake_quantize,
                                  fake_quantize_act, quantize_model)
 from test_quant_lens import tiny_model
@@ -91,7 +92,7 @@ def test_w8a8_hooks_persist():
     assert hooked(q) and torch.equal(q(toks), plain)
 
 
-@pytest.mark.parametrize("scheme", ["awq_lite", "w8a8"])
+@pytest.mark.parametrize("scheme", ["awq_lite", "awq_seq", "w8a8"])
 def test_blocks_restricts_quantization(scheme):
     m = tiny_model()
     q = build(m, scheme, 4, blocks=[1])
@@ -107,8 +108,9 @@ def test_bad_arguments_raise():
     m = tiny_model()
     with pytest.raises(ValueError):
         quantize_model(m, 4, scheme="gptq")
-    with pytest.raises(ValueError):
-        quantize_model(m, 4, scheme="awq_lite")
+    for scheme in ("awq_lite", "awq_seq"):
+        with pytest.raises(ValueError):
+            quantize_model(m, 4, scheme=scheme)
 
 
 def test_w_o_scales_span_heads():
@@ -120,3 +122,31 @@ def test_w_o_scales_span_heads():
         assert w[..., j].unique().numel() <= 15
     g = quantize_model(m, 4, group_size=16).blocks[0].attn.W_O
     assert g.shape == m.blocks[0].attn.W_O.shape
+
+
+def test_awq_seq_differs_from_awq_lite_after_block_0():
+    m = tiny_model()
+    lite, seq = dict(build(m, "awq_lite", 3).named_parameters()), dict(build(m, "awq_seq", 3).named_parameters())
+    for name in ("attn.W_Q", "attn.W_O", "mlp.W_in", "mlp.W_out"):
+        assert torch.equal(lite[f"blocks.0.{name}"], seq[f"blocks.0.{name}"])
+    assert any(not torch.equal(lite[f"blocks.1.{n}"], seq[f"blocks.1.{n}"])
+               for n in ("attn.W_Q", "attn.W_O", "mlp.W_in", "mlp.W_out"))
+
+
+def test_awq_seq_calibrates_on_quantized_prefix(monkeypatch):
+    m = tiny_model()
+    calls = []
+    real = qz._calib_inputs
+
+    def spy(model, toks, hooks, batch_size):
+        xs = real(model, toks, hooks, batch_size)
+        calls.append((model, hooks, xs))
+        return xs
+    monkeypatch.setattr(qz, "_calib_inputs", spy)
+    q = build(m, "awq_seq", 3)
+    assert [{h.split(".")[1] for h in hooks} for _, hooks, _ in calls] == [{"0"}, {"1"}]
+    assert all(model is q for model, _, _ in calls)
+    for model, hooks, xs in calls:
+        fp = real(m, tokens(), hooks, 8)
+        same = [torch.equal(xs[h], fp[h]) for h in hooks]
+        assert all(same) if hooks[0].startswith("blocks.0.") else not any(same)

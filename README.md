@@ -36,6 +36,7 @@ All quantization is **simulated** (quantize, then dequantize back to float), so 
 
 - **`rtn`**: symmetric round-to-nearest weights, with one scale per output channel, or per group of `--group-size` input rows.
 - **`awq_lite`**: a stripped-down version of activation-aware weight quantization. On a held-out calibration set (`--calib-seqs` sequences, BOS excluded), it measures the mean absolute activation of every input channel of each linear layer. Salient channels are scaled up by `s = mean_abs ** alpha` before rounding and the scale is divided back out afterwards (`Q(W * s) / s`, equivalent to folding `1/s` into the previous op). `alpha` is chosen per layer by a grid search over [0, 1] that minimizes the layer's output MSE. Q, K and V share one scale, as do `W_in` and `W_gate`, as in AWQ. There is no clipping search, and calibration uses full-precision activations. Calibration text is taken from after the evaluation sequences, so the two never overlap.
+- **`awq_seq`**: `awq_lite` with sequential calibration, as in real AWQ and GPTQ. Blocks are processed in order, and each block is calibrated on the activations of the partially quantized model, whose earlier blocks are already rounded, so the scale search sees the error that has built up upstream.
 - **`w8a8`**: RTN weights plus simulated symmetric per-token activation quantization (`--act-bits`, default 8) at the inputs of the quantized linear layers, applied through TransformerLens hooks.
 
 ### Measurement
@@ -107,6 +108,7 @@ Other schemes:
 ```bash
 python -m quant_lens.experiment --model gpt2 --scheme rtn --group-size 128 --bits 8 6 4 3 --out results/gpt2_rtn_g128
 python -m quant_lens.experiment --model gpt2 --scheme awq_lite --calib-seqs 32 --bits 8 6 4 3 --out results/gpt2_awq_lite
+python -m quant_lens.experiment --model gpt2 --scheme awq_seq --calib-seqs 32 --bits 8 6 4 3 --out results/gpt2_awq_seq
 python -m quant_lens.experiment --model gpt2 --scheme w8a8 --act-bits 8 --bits 8 6 4 3 --out results/gpt2_w8a8
 ```
 
@@ -167,7 +169,7 @@ GitHub Actions runs them on every push and pull request (`.github/workflows/test
 ## Layout
 
 ```
-quant_lens/quantize.py    simulated quantization: rtn, awq_lite, w8a8
+quant_lens/quantize.py    simulated quantization: rtn, awq_lite, awq_seq, w8a8
 quant_lens/metrics.py     streaming SAE feature comparison + logit drift
 quant_lens/experiment.py  experiment loop and CLI
 quant_lens/registry.py    model name -> SAE release, hooks, default layers, Neuronpedia link
