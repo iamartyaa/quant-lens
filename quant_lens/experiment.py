@@ -95,13 +95,15 @@ def load_texts(dataset: str | None, n_docs: int) -> list[str]:
 def run_experiment(model, saes: dict[str, object], tokens: torch.Tensor, bits_list: list[int],
                    group_size: int | None = None, batch_size: int = 8, topk: int = 10,
                    min_count: int = 5, device: str = "cpu", per_feature_dir: str | None = None,
-                   log=print) -> list[dict]:
+                   log=print, scheme: str = "rtn", calib_tokens: torch.Tensor | None = None,
+                   act_bits: int = 8, blocks: list[int] | None = None) -> list[dict]:
     """Compare SAE features of `model` against quantized copies.
 
     Args:
         saes: mapping from hook name (e.g. "blocks.6.hook_resid_pre") to SAE.
         tokens: [n_seqs, ctx] token ids; position 0 (BOS) is excluded from
             feature statistics because its residual norm is an outlier.
+        scheme, calib_tokens, act_bits, blocks: passed to `quantize_model`.
     Returns one summary row per (hook, bits).
     """
     hooks = list(saes)
@@ -109,7 +111,8 @@ def run_experiment(model, saes: dict[str, object], tokens: torch.Tensor, bits_li
     model.eval()
     for bits in bits_list:
         t0 = time.time()
-        qmodel = quantize_model(model, bits, group_size).eval()
+        qmodel = quantize_model(model, bits, group_size, scheme=scheme, calib_tokens=calib_tokens,
+                                act_bits=act_bits, blocks=blocks, batch_size=batch_size).eval()
         w_err = weight_error(model, qmodel)
         comps = {h: FeatureComparison(d_sae_of(saes[h]), topk, min_count, device) for h in hooks}
         kl_sum = agree_sum = n_tok = 0.0
@@ -132,7 +135,7 @@ def run_experiment(model, saes: dict[str, object], tokens: torch.Tensor, bits_li
 
         for h in hooks:
             res = comps[h].result().as_dict()
-            row = {"hook": h, "bits": bits, "group_size": group_size or 0,
+            row = {"hook": h, "bits": bits, "scheme": scheme, "group_size": group_size or 0,
                    "weight_rel_err": w_err, "logit_kl": kl_sum / max(n_tok, 1),
                    "top1_agree": agree_sum / max(n_tok, 1), **res}
             rows.append(row)
@@ -142,7 +145,8 @@ def run_experiment(model, saes: dict[str, object], tokens: torch.Tensor, bits_li
             if per_feature_dir:
                 os.makedirs(per_feature_dir, exist_ok=True)
                 pf = comps[h].per_feature()
-                torch.save(pf, os.path.join(per_feature_dir, f"{h}_{bits}bit.pt"))
+                torch.save({**pf, "n_tokens": comps[h].n},
+                           os.path.join(per_feature_dir, f"{h}_{bits}bit.pt"))
         log(f"[{bits}-bit] weight rel err={w_err:.4f} KL={kl_sum / max(n_tok, 1):.4f} "
             f"top1={agree_sum / max(n_tok, 1):.3f} ({time.time() - t0:.0f}s)")
         del qmodel

@@ -21,7 +21,16 @@ import torch
 # TransformerLens stores weights so that the layer computes x @ W.
 # The input dimension is always axis -2, so per-output-channel scaling means
 # taking the max over axis -2 (for every head / output column separately).
-DEFAULT_TARGETS = ("W_Q", "W_K", "W_V", "W_O", "W_in", "W_out")
+# `_W_K` / `_W_V` are the grouped-query attention names (e.g. Gemma 2) and
+# `W_gate` is the gated-MLP input projection.
+DEFAULT_TARGETS = ("W_Q", "W_K", "W_V", "_W_K", "_W_V", "W_O", "W_in", "W_gate", "W_out")
+SCHEMES = ("rtn",)
+
+
+def block_of(name: str) -> int | None:
+    """Block index of a parameter name like `blocks.3.attn.W_Q`, else None."""
+    parts = name.split(".")
+    return int(parts[1]) if parts[0] == "blocks" else None
 
 
 def fake_quantize(w: torch.Tensor, bits: int, group_size: int | None = None) -> torch.Tensor:
@@ -61,15 +70,25 @@ def fake_quantize(w: torch.Tensor, bits: int, group_size: int | None = None) -> 
 
 @torch.no_grad()
 def quantize_model(model, bits: int, group_size: int | None = None,
-                   targets: tuple[str, ...] = DEFAULT_TARGETS):
+                   targets: tuple[str, ...] = DEFAULT_TARGETS, *, scheme: str = "rtn",
+                   calib_tokens: torch.Tensor | None = None, act_bits: int = 8,
+                   blocks: list[int] | None = None, batch_size: int = 8):
     """Return a deep copy of a TransformerLens model with quantized weights.
 
     The original model is left untouched, so the same reference model can be
     compared against several bit widths.
+
+    Args:
+        scheme: one of `SCHEMES`.
+        calib_tokens: [n, ctx] calibration tokens, needed by activation-aware schemes.
+        act_bits: activation bit width for schemes that quantize activations.
+        blocks: only quantize these transformer blocks (None = all).
     """
+    if scheme not in SCHEMES:
+        raise ValueError(f"unknown scheme {scheme!r}, expected one of {SCHEMES}")
     qmodel = copy.deepcopy(model)
     for name, param in qmodel.named_parameters():
-        if name.split(".")[-1] in targets:
+        if name.split(".")[-1] in targets and (blocks is None or block_of(name) in blocks):
             param.copy_(fake_quantize(param.data, bits, group_size))
     return qmodel
 

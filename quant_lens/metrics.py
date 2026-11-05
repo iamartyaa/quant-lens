@@ -127,6 +127,7 @@ class FeatureComparison:
         return 1 - s["res"] / tot if tot > 0 else float("nan")
 
     def per_feature(self) -> dict[str, torch.Tensor]:
+        """Per-feature freq_ref, mean_active_ref, freq_q and corr, as float CPU tensors."""
         n = max(self.n, 1)
         mx, my = self.sx / n, self.sy / n
         cov = self.sxy / n - mx * my
@@ -137,6 +138,8 @@ class FeatureComparison:
                            torch.full_like(denom, float("nan")))
         return {
             "freq_ref": (self.count_ref / n).float().cpu(),
+            # mean activation on the tokens where the feature fires (reference)
+            "mean_active_ref": (self.sx / self.count_ref.clamp(min=1)).float().cpu(),
             "freq_q": (self.count_q / n).float().cpu(),
             "corr": corr.float().cpu(),
         }
