@@ -251,7 +251,7 @@ Layers 2, 6 and 10 for every scheme ([rtn](results/gpt2_rtn/report.md), [rtn g12
 
 ### Follow-up runs
 
-Run with `notebooks/run_gpt2_followups.ipynb` on a Colab T4 at commit `803e261`. The sweep on the T4 reproduces the CPU numbers of the first run to within 3e-5 in median feature correlation and 2e-5 in logit KL, so the two sets of results can be compared directly.
+Run with `notebooks/run_gpt2_followups.ipynb` on a Colab T4 at commit `803e261`. I also re-ran `notebooks/run_gpt2.ipynb` on the T4 to check it against the CPU results. RTN, group-wise RTN and `w8a8`, the ablation table and the fragility correlations all match to within 0.003, mostly to within 1e-4, and the same 1,200 fragile and robust features are selected. The exception is `awq_lite` at 3 bits: logit KL 4.51 on the GPU against 4.25 on the CPU. Its weight error at 8 bits also differs (0.0158 against 0.0176), so tiny numerical differences make the alpha grid search pick different scales for some layers. Its 3-bit numbers carry about that much uncertainty, though it is worse than RTN (3.14) either way.
 
 **A second slice of the data.** All four schemes again on documents 5,000 onwards of the Pile sample, with 512 sequences (65,024 tokens, four times the first run) ([results/robust](results/robust/)). Top-1 agreement stays within 0.03 of the first run for every scheme and bit width, group-wise RTN is still the best scheme at every bit width, `w8a8` is still the worst from 4 bits up, and `awq_lite` is again worse than RTN at 3 and 4 bits. The least stable numbers are the 3-bit feature correlations in the middle of the network: group-wise RTN at layer 6 went from 0.554 to 0.395.
 
