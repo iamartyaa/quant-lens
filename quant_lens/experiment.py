@@ -39,10 +39,12 @@ class SimpleSAE(torch.nn.Module):
         self.W_dec = torch.nn.Parameter(self.W_enc.data.T.clone())
         self.b_dec = torch.nn.Parameter(torch.zeros(d_model))
 
-    def encode(self, x):
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
+        """ReLU feature activations, [..., d_sae]."""
         return torch.relu((x - self.b_dec) @ self.W_enc + self.b_enc)
 
-    def decode(self, f):
+    def decode(self, f: torch.Tensor) -> torch.Tensor:
+        """Reconstruction of the input from feature activations, [..., d_model]."""
         return f @ self.W_dec + self.b_dec
 
 
@@ -271,7 +273,8 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main():
+def main() -> None:
+    """CLI entry point: load the model and SAEs, then `run_suite`."""
     args = build_parser().parse_args()
 
     from transformer_lens import HookedTransformer

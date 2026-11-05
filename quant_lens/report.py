@@ -121,7 +121,8 @@ def build_report(results_dir: str) -> str:
     return report
 
 
-def main():
+def main() -> None:
+    """CLI: python -m quant_lens.report [results_dir]."""
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("results_dir", nargs="?", default="results")
     print(f"wrote {build_report(p.parse_args().results_dir)}")

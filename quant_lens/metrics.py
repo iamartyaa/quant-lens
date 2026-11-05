@@ -33,6 +33,8 @@ import torch
 
 @dataclass
 class ComparisonResult:
+    """Final metrics for one (hook, model pair); see the module docstring."""
+
     n_tokens: int
     n_alive_ref: int
     median_feature_corr: float
@@ -47,10 +49,16 @@ class ComparisonResult:
     fve_q: float
 
     def as_dict(self) -> dict:
+        """Fields as a plain dict, for building summary rows."""
         return self.__dict__.copy()
 
 
 class FeatureComparison:
+    """Accumulates feature statistics batch by batch; call `update`, then `result`.
+
+    A feature counts as alive when it fires on at least `min_count` tokens.
+    """
+
     def __init__(self, d_sae: int, topk: int = 10, min_count: int = 5,
                  device: str | torch.device = "cpu"):
         self.d_sae = d_sae
@@ -145,6 +153,7 @@ class FeatureComparison:
         }
 
     def result(self) -> ComparisonResult:
+        """Summary metrics over everything added so far."""
         pf = self.per_feature()
         alive_ref = self.count_ref.cpu() >= self.min_count
         alive_q = self.count_q.cpu() >= self.min_count

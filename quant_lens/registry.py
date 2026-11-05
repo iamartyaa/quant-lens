@@ -11,6 +11,8 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class ModelSpec:
+    """Where a model's SAEs live and how to name their hooks; `{layer}` is filled per layer."""
+
     sae_release: str
     hook_template: str
     sae_id_template: str

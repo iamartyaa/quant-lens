@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import matplotlib
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -15,7 +20,8 @@ PANELS = [
 ]
 
 
-def plot_summary(df, path: str):
+def plot_summary(df: "pd.DataFrame", path: str) -> None:
+    """One panel per metric in PANELS, one line per hook, bits on a reversed x axis."""
     fig, axes = plt.subplots(1, len(PANELS), figsize=(4 * len(PANELS), 3.4))
     for ax, (col, title) in zip(axes, PANELS):
         for hook, g in df.groupby("hook"):

@@ -145,7 +145,7 @@ def run_steering(model, qmodel, saes: dict[str, object], tokens: torch.Tensor,
     return rows
 
 
-def plot_steering(df, path: str):
+def plot_steering(df: "pd.DataFrame", path: str) -> None:
     """Median steering cosine and steered KL vs bits, one line per hook
     (per hook and alpha / scheme when several are present)."""
     keys = ["hook"] + [c for c in ("alpha", "scheme") if c in df and df[c].nunique() > 1]
